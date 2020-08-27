@@ -1,0 +1,408 @@
+ 
+ 
+ 
+ 
+ 
+	 
+	 
+	 
+	  
+	 
+ 
+ 
+ 
+ SELECT scheduled_program_no
+	,operating_unit_no
+	,T.inventory_type_code
+	,selling_title_no
+	,t.spot_category_code
+	,'log_item' AS Source
+	,'No' AS Preempted
+	,spot_length / 30 AS Unit
+	,'Capacity' AS [Record_Type]
+	,t.air_date
+	,t.spot_type
+	,t.time_category
+	,t.scheduled_program
+	,spot_count
+	,t.spot_length
+	,CAST(0 AS INT) AS capacity_program_status
+	,NULL AS [Inventory_Category]
+	,CAST(0 AS INT) AS [Sold_$]
+	,CAST(0 AS INT) AS [Net_$]
+	,CAST(0 AS INT) AS [Guar_Impressions]
+FROM (
+	SELECT   cast(li.pod_inventory_type_code as int) AS inventory_type_code
+		,cast(l.log_date AS DATE) AS air_date
+		,(
+			SELECT max(st.selling_title_no)
+			FROM edh.rt_selling_title_sched_program sp
+			INNER JOIN edh.lt_selling_title st ON Sp.selling_title_key = st.selling_title_key
+			WHERE sp.scheduled_program_key = li.scheduled_program_key
+				AND sp.landed_selling_title_no IS NULL
+			) AS selling_title_no
+		,li.spot_type
+		,li.time_category
+		,li.spot_category_code
+		,ou.pace_operating_unit_no AS operating_unit_no
+		,spr.scheduled_program_no
+		,p.title AS scheduled_program
+		,count(li.log_time) AS spot_count
+		,Sum(li.length) AS spot_length
+	FROM edh.lt_log_table l
+	INNER JOIN edh.lt_status_codes sc ON l.status_code_key = sc.status_code_key
+	INNER JOIN edh.lt_operating_unit ou ON ou.operating_unit_key = l.operating_unit_key
+	INNER JOIN edh.lt_log_item_table li ON l.log_no = li.log_no
+	INNER JOIN edh.lt_scheduled_program spr ON spr.scheduled_program_key = li.scheduled_program_key
+	LEFT JOIN edh.lt_program p ON p.program_no = spr.program_no
+	WHERE sc.status_code IN (
+			122
+			,124
+			) --122:Reconciled, 124:Posted
+		AND isnull(li.spot_category_code, - 1) != 90
+		AND log_function_type <> 'H'
+		AND pod_inventory_type_code IN (
+			10
+			,160
+			)
+		AND p.title NOT LIKE '%paid%'
+		AND spr.log_type_code <> 40
+		AND l.log_date >= '01-01-2016'
+	GROUP BY li.pod_inventory_type_code
+		,cast(l.log_date AS DATE)
+		,li.spot_type
+		,li.time_category
+		,li.spot_category_code
+		,ou.pace_operating_unit_no
+		,li.scheduled_program_key
+		,spr.scheduled_program_no
+		,p.title
+	) t
+
+UNION ALL
+
+SELECT scheduled_program_no
+	,t1.operating_unit_no
+	,t1.inventory_type_code
+	,CAST(0 AS INT) AS selling_title_no
+	,CAST(0 AS INT) spot_category_code
+	,'program_total_inventory' AS Source
+	,'No' AS Preempted
+	,Unit
+	,'Capacity' AS [Record_Type]
+	,t1.air_date
+	,NULL AS spot_type
+	,NULL AS time_category
+	,scheduled_program
+	,spot_count
+	,CAST(0 AS INT) AS spot_length
+	,capacity_program_status
+	,NULL AS [Inventory_Category]
+	,CAST(0 AS INT) AS [Sold_$]
+	,CAST(0 AS INT) AS [Net_$]
+	,CAST(0 AS INT) AS [Guar_Impressions] 
+FROM (
+	SELECT ou.pace_operating_unit_no AS operating_unit_no
+		,cast(it.inventory_type_code as int) as inventory_type_code
+		,cast(ti.air_date AS DATE) AS air_date
+		,sp.scheduled_program_no
+		,p.title AS scheduled_program
+		,p.status_code AS capacity_program_status
+		,count(1) AS spot_count
+		,Sum(ti.inventory_units) AS Unit
+	FROM edh.ft_program_total_inventory ti
+	INNER JOIN edh.lt_operating_unit ou ON ou.operating_unit_key = ti.operating_unit_key
+	INNER JOIN edh.lt_inventory_type it ON it.inventory_type_key = ti.inventory_type_key
+	INNER JOIN edh.lt_scheduled_program sp ON sp.scheduled_program_key = ti.scheduled_program_key
+	LEFT JOIN edh.lt_program p ON p.program_no = sp.program_no
+	WHERE it.inventory_type_code IN (
+			10
+			,160
+			) -- 10=PRMN, 160=NET
+		AND p.title NOT LIKE '%paid%'
+		AND sp.log_type_code NOT IN (
+			20
+			,40
+			)
+		AND sp.log_status IS NOT NULL
+		AND sp.status_code = 20
+		AND (
+			sp.log_status != 'L'
+			OR ti.air_date > '01-01-2016'
+			)
+	GROUP BY ou.pace_operating_unit_no
+		,it.inventory_type_code
+		,sp.scheduled_program_no
+		,p.title
+		,p.status_code
+		,cast(ti.air_date AS DATE)
+	) t1
+
+	union  all
+	
+	
+
+---3  
+SELECT scheduled_program_no
+	,operating_unit_no
+	,inventory_type_code
+	,selling_title_no
+	,spot_category_code
+	,'contract_spot_traffic' AS Source
+	,Preempted
+	,Unit
+	,'Inventory' AS [Record_Type]
+	,air_date
+	,spot_type
+	,NULL AS time_category
+	,scheduled_program
+	,spot_count
+	,spot_length
+	,CAST(0 AS INT) AS capacity_program_status
+	,'DR and Other' AS [Inventory_Category]
+	,CAST(price AS INT) AS [Sold_$]
+	,CAST(price * 0.85 AS INT) AS [Net_$]
+	,CAST(0 AS INT) AS [Guar_Impressions]
+FROM (
+	SELECT ou.pace_operating_unit_no AS operating_unit_no
+		,cast(it.inventory_type_code as int) as inventory_type_code
+		,cst.spot_category_code
+		,st.selling_title_no
+		,spt.spot_type
+		,cast(cst.air_date AS DATE) AS air_date
+		,CASE 
+			WHEN cst.preempted = 'Y'
+				THEN 'Yes'
+			ELSE 'No'
+			END AS Preempted
+		,spr.scheduled_program_no
+		,p.title AS scheduled_program
+		,count(cst.air_date) AS spot_count
+		,Sum(cst.price) AS price
+		,Sum(sl.unit_30_equiv) AS Unit
+		,Sum(sl.spot_length) AS spot_length
+	FROM edh.ft_contract_spot_traffic cst
+	INNER JOIN edh.lt_operating_unit ou ON ou.operating_unit_key = cst.operating_unit_key
+	INNER JOIN edh.lt_inventory_type it ON it.inventory_type_key = cst.inventory_type_key
+	INNER JOIN edh.ft_contract c ON c.contract_no = cst.contract_no ---replace parent 
+	INNER JOIN edh.ft_contract_mgmt_buy_line cbl ON cbl.contr_mgmt_buy_line_no = cst.contr_mgmt_buy_line_no
+	INNER JOIN edh.lt_spot_type spt ON spt.spot_type_key = cbl.spot_type_key
+	--- selling title , spot type key needed
+	INNER JOIN edh.lt_spot_length sl ON sl.spot_length_code = cst.spot_length_code
+	LEFT JOIN edh.lt_scheduled_program spr ON spr.scheduled_program_key = cst.scheduled_program_key
+	LEFT JOIN edh.lt_program p ON p.program_no = spr.program_no
+	LEFT JOIN edh.lt_selling_title st ON st.selling_title_key = cbl.selling_title_key
+	INNER JOIN edh.lt_selling_category sc ON sc.selling_category_key = st.selling_category_key
+	WHERE it.inventory_type_code = 10
+		AND c.sell_type_code IN (
+			8
+			,9
+			,10
+			)
+		AND spr.log_type_code <> 40
+		AND p.title NOT LIKE '%paid%'
+		AND (
+			cst.spot_category_code IN (
+				110
+				,40
+				,50
+				)
+			OR (
+				cst.spot_category_code = 10
+				AND sc.selling_category_no = 394
+				)
+			)
+		AND cst.air_date >= '01-01-2016'
+	GROUP BY ou.pace_operating_unit_no
+		,it.inventory_type_code
+		,cst.spot_category_code
+		,st.selling_title_no
+		,spt.spot_type
+		,cst.preempted
+		,cast(cst.air_date AS DATE)
+		,spr.scheduled_program_no
+		,p.title
+	) t3
+	
+	union all
+ 
+
+SELECT scheduled_program_no
+	,operating_unit_no
+    ,cast(inventory_type_code as int) asinventory_type_code
+	,selling_title_no
+	,spot_category_code
+	,'log_item' AS Source
+	,'No' AS Preempted
+	,spot_length / 30 AS Unit
+	,'Inventory' AS [Record_Type]
+	,air_date
+	,spot_type
+	,time_category
+	,scheduled_program
+	,spot_count
+	,spot_length
+	,CAST(0 AS INT) AS capacity_program_status
+	,CASE 
+		WHEN inventory_type_code = 10
+			THEN 'PROMO'
+		ELSE 'OAP PROMO'
+		END AS [Inventory_Category]
+	,cast(0 AS INT) AS [Sold_$]
+	,cast(0 AS INT) AS [Net_$]
+	,cast(0 AS INT) AS [Guar_Impressions]
+FROM (
+	SELECT li.pod_inventory_type_code AS inventory_type_code
+		,CAST(l.log_date AS DATE) AS air_date
+		,(
+			SELECT max(st.selling_title_no)
+			FROM edh.rt_selling_title_sched_program sp
+			INNER JOIN edh.lt_selling_title st ON Sp.selling_title_key = st.selling_title_key
+			WHERE sp.scheduled_program_key = li.scheduled_program_key
+				AND sp.landed_selling_title_no IS NULL
+			) AS selling_title_no
+		,li.spot_type
+		,li.time_category
+		,li.spot_category_code
+		,ou.pace_operating_unit_no AS operating_unit_no
+		,spr.scheduled_program_no
+		,p.title AS scheduled_program
+		,count(li.log_time) AS spot_count
+		,Sum(li.length) AS spot_length
+	FROM edh.lt_log_table l
+	INNER JOIN edh.lt_status_codes sc ON sc.status_code_key = l.status_code_key
+	INNER JOIN edh.lt_operating_unit ou ON ou.operating_unit_key = l.operating_unit_key
+	INNER JOIN edh.lt_log_item_table li ON l.log_no = li.log_no
+		AND (
+			li.time_category IN (
+				'PRON'
+				,'PSAN'
+				,'PRN'
+				,'IDN'
+				)
+			OR (
+				li.spot_category_code = 100
+				AND time_category = 'CML'
+				)
+			)
+	LEFT JOIN edh.lt_scheduled_program spr ON spr.scheduled_program_key = li.scheduled_program_key
+	LEFT JOIN edh.lt_program p ON p.program_no = spr.program_no
+	WHERE sc.status_code IN (
+			122
+			,124
+			)
+		AND log_function_type <> 'H'
+		AND spr.log_type_code <> 40
+		AND p.title NOT LIKE '%paid%'
+		AND li.pod_inventory_type_code IN (
+			10
+			,160
+			)
+		AND li.air_date >= '01-01-2016'
+	GROUP BY li.pod_inventory_type_code
+		,CAST(l.log_date AS DATE)
+		,li.spot_type
+		,li.time_category
+		,li.spot_category_code
+		,li.scheduled_program_key
+		,ou.pace_operating_unit_no
+		,spr.scheduled_program_no
+		,p.title
+	) t4
+	union all
+	
+	SELECT scheduled_program_no
+	,operating_unit_no
+	,inventory_type_code
+	,selling_title_no
+	,spot_category_code
+	,'deal_sold_inventory' AS Source
+	,Preempted
+	,Unit
+	,'Inventory' AS [Record_Type]
+	,air_date
+	,spot_type
+	,NULL time_category
+	,scheduled_program
+	,spot_count
+	,spot_length
+	,CAST(0 AS INT) AS capacity_program_status
+	,'Inventory Category' AS Inventory_Category
+	,price AS [Sold_$]
+	,price * 0.85 AS Net_$
+	,guar_imps AS [Guar_Impressions]
+FROM (
+	SELECT sc.spot_category_code
+		,dsi.spot_type
+		,cast(it.inventory_type_code as int) as inventory_type_code
+		,ou.pace_operating_unit_no AS operating_unit_no
+		,CASE 
+			WHEN dsi.preempted_datetime IS NULL
+				THEN 'No'
+			ELSE 'Yes'
+			END AS Preempted
+		,cast(dsi.airdate AS DATE) AS air_date
+		,spr.scheduled_program_no
+		,p.title AS scheduled_program
+		,st.selling_title_no
+		,sum(sl.unit_30_equiv * rd.impressions) AS guar_imps
+		,sum(sl.unit_30_equiv) AS Unit
+		,sum(dsi.deal_rate) AS price
+		,count(*) AS spot_count
+		,sum(sl.spot_length) AS spot_length
+	FROM edh.ft_deal_sold_inventory dsi
+	LEFT JOIN edh.lt_deal d ON d.deal_key = dsi.deal_key
+	LEFT JOIN edh.lt_spot_category sc ON dsi.spot_category_key = sc.spot_category_key
+	LEFT JOIN edh.lt_inventory_type it ON it.inventory_type_key = dsi.inventory_type_key
+	LEFT JOIN edh.lt_selling_title st ON st.selling_title_key = dsi.selling_title_key
+	LEFT JOIN edh.lt_operating_unit_transaction OUTPUT ON OUTPUT.operating_unit_transaction_key = dsi.operating_unit_transaction_key
+		AND OUTPUT.source_system = 'P'
+	LEFT JOIN edh.lt_operating_unit ou ON OUTPUT.operating_unit_key = ou.operating_unit_key
+	LEFT JOIN edh.lt_scheduled_program spr ON spr.scheduled_program_key = dsi.scheduled_program_key
+	LEFT JOIN edh.lt_program p ON p.program_no = spr.program_no
+	LEFT JOIN edh.lt_spot_length sl ON sl.spot_length_key = dsi.spot_length_key
+	LEFT JOIN edh.lt_ratecard_demo rd ON rd.ratecard_key = dsi.ratecard_key --and d.pace_sales_demo_no  = out.corporate_demo_id
+	--left join edh.lt_demo de on de.demo_key= rd.demo_key and de.pace_sales_demo_no  = out.corporate_demo_id
+	WHERE
+		--exists (select 1 
+		--               from pace_history.deal_operating_unit dou, edh.deal_ou_quarter douq 
+		--              where dou.deal_item_no = d.deal_item_no   and dou.operating_unit_no = ou.pace_operating_unit_no 
+		--                and dou.deal_ou_no = douq.deal_ou_no and douq.quarter_no = dsi.quarter_no)
+		--  and 
+		--  sl.spot_length_code=dsi.spot_length_code
+		--  and
+		d.order_status_code = 20
+		AND d.status_code IN (
+			30
+			,40
+			)
+		AND dsi.deal_order_status_code = 20
+		--and d.deal_item_no = dsi.deal_item_no
+		AND it.inventory_type_code IN (
+			10
+			,160
+			)
+		AND sc.spot_category_code NOT IN (
+			100
+			,110
+			,40
+			,50
+			)
+		AND p.title NOT LIKE '%paid%'
+		AND spr.log_type_code <> 40
+		AND dsi.spot_type <> 'BB'
+		AND dsi.airdate >= '01-01-2016'
+	GROUP BY sc.spot_category_code
+		,dsi.spot_type
+		,it.inventory_type_code
+		,ou.pace_operating_unit_no
+		,st.selling_title_no
+		,CASE 
+			WHEN dsi.preempted_datetime IS NULL
+				THEN 'No'
+			ELSE 'Yes'
+			END
+		,cast(dsi.airdate AS DATE)
+		,spr.scheduled_program_no
+		,p.title
+	) t5 
